@@ -1,7 +1,7 @@
 {
   "name": "midterm-crud-api",
   "version": "1.0.0",
-  "description": "",
+  "description": "This project is a RESTful CRUD API built using TypeScript, Node.js, Express, TypeORM, and MySQL. It includes user management, task management, validation, authentication, database migrations, and password hashing.",
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -32,5 +32,13 @@
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "typescript": "^7.0.2"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elysonlaroa-web/midterm-crud-api.git"
+  },
+  "bugs": {
+    "url": "https://github.com/elysonlaroa-web/midterm-crud-api/issues"
+  },
+  "homepage": "https://github.com/elysonlaroa-web/midterm-crud-api#readme"
 }

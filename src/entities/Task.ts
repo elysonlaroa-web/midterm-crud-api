@@ -5,12 +5,15 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
+  ManyToMany,
   JoinColumn,
+  JoinTable,
   Index,
 } from "typeorm";
 
 import { User } from "./User";
 import { Category } from "./Category";
+import { Tag } from "./Tag";
 
 @Entity("tasks")
 @Index(["userId"])
@@ -44,6 +47,21 @@ export class Task {
   @Column({ type: "date", nullable: true })
   dueDate!: Date | null;
 
+  // Check if task is overdue
+  get isOverdue(): boolean {
+    if (!this.dueDate || this.status === "completed") {
+      return false;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const due = new Date(this.dueDate);
+    due.setHours(0, 0, 0, 0);
+
+    return due < today;
+  }
+
   // Many tasks belong to one user
   @ManyToOne(() => User, (user) => user.tasks, {
     nullable: true,
@@ -62,6 +80,11 @@ export class Task {
   })
   @JoinColumn({ name: "categoryId" })
   category!: Category | null;
+
+  // Many tasks can have many tags
+  @ManyToMany(() => Tag, (tag) => tag.tasks)
+  @JoinTable()
+  tags!: Tag[];
 
   @CreateDateColumn()
   createdAt!: Date;

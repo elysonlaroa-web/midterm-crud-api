@@ -5,10 +5,15 @@ import { Task } from "../entities/Task";
 import { User } from "../entities/User";
 import { Category } from "../entities/Category";
 import { CreateTaskDto } from "../dto/CreateTaskDto";
+import { TaskRepository } from "../repositories/TaskRepository";
 
 const taskRepository = AppDataSource.getRepository(Task);
 const userRepository = AppDataSource.getRepository(User);
 const categoryRepository = AppDataSource.getRepository(Category);
+
+function sanitizeInput(value: string): string {
+  return value.replace(/<[^>]*>/g, "").trim();
+}
 
 export class TaskController {
   // GET /api/users/:userId/tasks - Get all tasks for a user
@@ -189,7 +194,10 @@ export class TaskController {
 
       return res.json({
         success: true,
-        data: tasks,
+        data: tasks.map((task) => ({
+          ...task,
+          isOverdue: task.isOverdue,
+        })),
         meta: {
           total,
           page: pageNumber,
@@ -322,8 +330,11 @@ export class TaskController {
 
       // Create task with category relationship
       const task = taskRepository.create({
-        title: title.trim(),
-        description,
+        title: sanitizeInput(title),
+        description:
+          typeof description === "string"
+            ? sanitizeInput(description)
+            : (description ?? null),
         status: status || "pending",
         priority: priority || "medium",
         dueDate: dueDate || null,
@@ -336,7 +347,10 @@ export class TaskController {
       return res.status(201).json({
         success: true,
         message: "Task created successfully",
-        data: savedTask,
+        data: {
+          ...savedTask,
+          isOverdue: savedTask.isOverdue,
+        },
       });
     } catch (error) {
       console.error("Error creating task:", error);
@@ -461,6 +475,34 @@ export class TaskController {
         error: {
           code: "INTERNAL_ERROR",
           message: "Failed to fetch task statistics",
+        },
+      });
+    }
+  }
+  // GET /api/tasks/overdue - Get all overdue tasks
+  static async getOverdueTasks(req: Request, res: Response) {
+    try {
+      const overdueTaskRepository = new TaskRepository(AppDataSource);
+
+      const tasks = await overdueTaskRepository.findOverdueTasks();
+
+      return res.status(200).json({
+        success: true,
+        message: "Overdue tasks retrieved successfully",
+        count: tasks.length,
+        data: tasks.map((task) => ({
+          ...task,
+          isOverdue: task.isOverdue,
+        })),
+      });
+    } catch (error) {
+      console.error("Error fetching overdue tasks:", error);
+
+      return res.status(500).json({
+        success: false,
+        error: {
+          code: "INTERNAL_ERROR",
+          message: "Failed to fetch overdue tasks",
         },
       });
     }

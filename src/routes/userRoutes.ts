@@ -10,6 +10,11 @@ userRoutes.get("/", UserController.getAll);
 // GET /api/users/:id
 userRoutes.get("/:id", UserController.getById);
 
+// POST /api/users/with-initial-task
+userRoutes.post(
+  "/with-initial-task",
+  UserController.createWithInitialTask);
+
 // POST /api/users
 userRoutes.post("/", UserController.create);
 

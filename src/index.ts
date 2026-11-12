@@ -2,7 +2,6 @@ import "reflect-metadata";
 import express from "express";
 import cors from "cors";
 import * as dotenv from "dotenv";
-
 import { AppDataSource } from "./config/data-source";
 import { userRoutes } from "./routes/userRoutes";
 import { taskRoutes } from "./routes/taskRoutes";
@@ -21,9 +20,7 @@ app.use(express.json());
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
 
-  console.log(
-    `[${timestamp}] ${req.method} ${req.originalUrl}`
-  );
+  console.log(`[${timestamp}] ${req.method} ${req.originalUrl}`);
 
   next();
 });
@@ -37,10 +34,34 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Routes
-app.use("/api", taskRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/auth", authRoutes);
+
+// Version 1 API Routes
+app.use("/api/v1", taskRoutes);
+app.use("/api/v1/users", userRoutes);
+app.use("/api/v1/auth", authRoutes);
+
+// Legacy API Routes - Return HTTP 410 Gone
+app.use("/api", (req, res, next) => {
+  // Allow unmatched version 1 routes to reach the 404 handler
+  if (req.path === "/v1" || req.path.startsWith("/v1/")) {
+    return next();
+  }
+
+  const newEndpoint = req.originalUrl.replace(
+    /^\/api(?=\/|$)/,
+    "/api/v1"
+  );
+
+  return res.status(410).json({
+    success: false,
+    error: {
+      code: "API_VERSION_DEPRECATED",
+      message: "This API endpoint has moved to version 1.",
+      newEndpoint,
+    },
+  });
+});
+
 
 // 404 handler
 app.use((req, res) => {
@@ -53,21 +74,73 @@ app.use((req, res) => {
   });
 });
 
+// HTTP server reference
+let server: ReturnType<typeof app.listen>;
+
+// Prevent multiple shutdown executions
+let isShuttingDown = false;
+
+// Graceful shutdown function
+async function gracefulShutdown(signal: string) {
+  if (isShuttingDown) {
+    return;
+  }
+
+  isShuttingDown = true;
+
+  console.log(`\n${signal} received. Starting graceful shutdown...`);
+
+  try {
+    // Stop accepting new requests and wait for active requests
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+    });
+
+    console.log("✅ HTTP server closed successfully.");
+
+    // Close database connection
+    if (AppDataSource.isInitialized) {
+      await AppDataSource.destroy();
+      console.log("✅ Database connection closed successfully.");
+    }
+
+    console.log("👋 Graceful shutdown completed.");
+  } catch (error) {
+    console.error("❌ Error during graceful shutdown:", error);
+    process.exitCode = 1;
+  }
+}
+
 // Initialize database connection
 AppDataSource.initialize()
   .then(() => {
     console.log("✅ Database connected successfully!");
 
-    app.listen(PORT, () => {
+    server = app.listen(PORT, () => {
       console.log(`🚀 Server running on http://localhost:${PORT}`);
       console.log(`🏥 Health check: http://localhost:${PORT}/health`);
       console.log(`👥 Users API: http://localhost:${PORT}/api/users`);
       console.log(
         `📋 Tasks API: http://localhost:${PORT}/api/users/:userId/tasks`,
       );
+
+      // Listen for shutdown signals
+      process.on("SIGINT", () => {
+        void gracefulShutdown("SIGINT");
+      });
+
+      process.on("SIGTERM", () => {
+        void gracefulShutdown("SIGTERM");
+      });
     });
   })
   .catch((error) => {
     console.error("❌ Database connection failed:", error);
-    process.exit(1);
+    process.exitCode = 1;
   });

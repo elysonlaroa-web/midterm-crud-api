@@ -5,8 +5,15 @@ import { User } from '../entities/User';
 import bcrypt from "bcrypt";
 import { CreateUserDto } from "../dto/CreateUserDto";
 import { UpdateUserDto } from "../dto/UpdateUserDto";
+import { Task } from "../entities/Task";
+import { Category } from "../entities/Category";
 
 const userRepository = AppDataSource.getRepository(User);
+
+// Sanitize HTML tags from input
+function sanitizeInput(value: string): string {
+  return value.replace(/<[^>]*>/g, "").trim();
+}
 
 // Validate optional phone number
 function validatePhoneNumber(value: unknown): {
@@ -46,6 +53,17 @@ function validatePhoneNumber(value: unknown): {
   }
 
   return { valid: true, value: phoneNumber };
+}
+
+class TransactionRequestError extends Error {
+  constructor(
+    public statusCode: number,
+    public errorCode: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "TransactionRequestError";
+  }
 }
 
 export class UserController {
@@ -131,6 +149,266 @@ export class UserController {
         error: {
           code: "INTERNAL_ERROR",
           message: "Failed to fetch user",
+        },
+      });
+    }
+  }
+
+  // POST /api/users/with-initial-task
+  static async createWithInitialTask(req: Request, res: Response) {
+    try {
+      const body = req.body as {
+        name?: string;
+        email?: string;
+        password?: string;
+        phoneNumber?: string;
+        task?: {
+          title?: string;
+          description?: string | null;
+          status?: string;
+          priority?: string;
+          dueDate?: string | null;
+          categoryId?: number;
+        };
+      };
+
+      const { name, email, password, phoneNumber } = body;
+      const taskInput = body.task;
+
+      // Validate required user fields
+      if (
+        typeof name !== "string" ||
+        !name.trim() ||
+        typeof email !== "string" ||
+        !email.trim() ||
+        typeof password !== "string" ||
+        !password ||
+        !taskInput ||
+        typeof taskInput.title !== "string" ||
+        !taskInput.title.trim()
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: "MISSING_FIELDS",
+            message: "Name, email, password, and task title are required",
+          },
+        });
+      }
+
+      // Validate phone number
+      const phoneValidation = validatePhoneNumber(phoneNumber);
+
+      if (!phoneValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: "INVALID_PHONE_NUMBER",
+            message: "Invalid phone number",
+          },
+        });
+      }
+
+      // Validate task title length
+      if (taskInput.title.trim().length > 200) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: "INVALID_TITLE",
+            message: "Task title must not exceed 200 characters",
+          },
+        });
+      }
+
+      // Validate task description
+      if (
+        taskInput.description !== undefined &&
+        taskInput.description !== null &&
+        typeof taskInput.description !== "string"
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: "INVALID_DESCRIPTION",
+            message: "Task description must be a string",
+          },
+        });
+      }
+
+      // Validate status and priority
+      const allowedStatuses = ["pending", "in-progress", "completed"];
+      const allowedPriorities = ["low", "medium", "high"];
+
+      if (
+        taskInput.status !== undefined &&
+        !allowedStatuses.includes(taskInput.status)
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: "INVALID_STATUS",
+            message: "Invalid task status",
+          },
+        });
+      }
+
+      if (
+        taskInput.priority !== undefined &&
+        !allowedPriorities.includes(taskInput.priority)
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: "INVALID_PRIORITY",
+            message: "Invalid task priority",
+          },
+        });
+      }
+
+      // Validate due date
+      let dueDate: Date | null = null;
+
+      if (taskInput.dueDate) {
+        dueDate = new Date(taskInput.dueDate);
+
+        if (isNaN(dueDate.getTime())) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: "INVALID_DUE_DATE",
+              message: "Invalid task due date",
+            },
+          });
+        }
+      }
+
+      // Validate optional category ID
+      if (
+        taskInput.categoryId !== undefined &&
+        (!Number.isInteger(taskInput.categoryId) || taskInput.categoryId <= 0)
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: "INVALID_CATEGORY_ID",
+            message: "Category ID must be a positive integer",
+          },
+        });
+      }
+
+      // Hash password before starting the transaction
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // Create User and Task in ONE database transaction
+      const result = await AppDataSource.transaction(async (manager) => {
+        const users = manager.getRepository(User);
+        const tasks = manager.getRepository(Task);
+        const categories = manager.getRepository(Category);
+
+        // Check duplicate email inside transaction
+        const existingUser = await users.findOne({
+          where: { email: email.trim() },
+        });
+
+        if (existingUser) {
+          throw new TransactionRequestError(
+            409,
+            "EMAIL_EXISTS",
+            "A user with this email already exists",
+          );
+        }
+
+        // 1. Create User
+        const user = users.create({
+          name: name.trim(),
+          email: email.trim(),
+          password: hashedPassword,
+          phoneNumber: phoneValidation.value,
+        });
+
+        const savedUser = await users.save(user);
+
+        // 2. Find optional Category
+        let category: Category | null = null;
+
+        if (taskInput.categoryId !== undefined) {
+          category = await categories.findOne({
+            where: { id: taskInput.categoryId },
+          });
+
+          if (!category) {
+            throw new TransactionRequestError(
+              404,
+              "CATEGORY_NOT_FOUND",
+              "The specified category does not exist",
+            );
+          }
+        }
+
+        // 3. Create initial Task
+        const task = tasks.create({
+          title: sanitizeInput(String(taskInput.title)),
+          description:
+            typeof taskInput.description === "string"
+              ? sanitizeInput(taskInput.description)
+              : (taskInput.description ?? null),
+          status: (taskInput.status ?? "pending") as
+            | "pending"
+            | "in-progress"
+            | "completed",
+          priority: (taskInput.priority ?? "medium") as
+            | "low"
+            | "medium"
+            | "high",
+          dueDate,
+          isDeleted: false,
+          user: savedUser,
+          userId: savedUser.id,
+          category,
+        });
+
+        const savedTask = await tasks.save(task);
+
+        // Both records are committed when the callback succeeds
+        return {
+          user: savedUser,
+          task: savedTask,
+        };
+      });
+
+      // Remove password from response
+      const { password: _, ...userWithoutPassword } = result.user;
+
+      return res.status(201).json({
+        success: true,
+        message: "User and initial task created successfully",
+        data: {
+          user: userWithoutPassword,
+          task: {
+            ...result.task,
+            user: userWithoutPassword,
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Error creating user with initial task:", error);
+
+      if (error instanceof TransactionRequestError) {
+        return res.status(error.statusCode).json({
+          success: false,
+          error: {
+            code: error.errorCode,
+            message: error.message,
+          },
+        });
+      }
+
+      return res.status(500).json({
+        success: false,
+        error: {
+          code: "TRANSACTION_FAILED",
+          message:
+            "Failed to create user and initial task. All changes were rolled back.",
         },
       });
     }

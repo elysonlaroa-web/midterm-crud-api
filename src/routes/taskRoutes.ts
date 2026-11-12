@@ -1,4 +1,3 @@
-// src/routes/taskRoutes.ts
 import { Router } from "express";
 import { TaskController } from "../controllers/taskController";
 
@@ -12,4 +11,5 @@ taskRoutes.post("/users/:userId/tasks", TaskController.createTask);
 taskRoutes.get("/users/:userId/stats", TaskController.getTaskStats);
 
 // Direct task routes
+taskRoutes.get("/tasks/overdue", TaskController.getOverdueTasks);
 taskRoutes.delete("/tasks/:id", TaskController.deleteTask);

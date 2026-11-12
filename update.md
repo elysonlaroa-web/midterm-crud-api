@@ -1,1 +1,1 @@
-Elyson Laroa Miterm hands-on
+Elyson Laroa Midterm Hands-on
